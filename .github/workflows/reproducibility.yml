@@ -64,7 +64,7 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt
+          pip install -r requirements-reproducibility.txt
 
           echo "=== DEPENDENCY MANIFEST ===" | tee dependencies.txt
           pip freeze | tee -a dependencies.txt
