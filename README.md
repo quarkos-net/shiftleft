@@ -1,8 +1,31 @@
 # Shiftleft
 
-**Pre-silicon side-channel verification for post-quantum cryptographic hardware.**
+> **Pre-Silicon Side-Channel Verification for Post-Quantum Cryptographic Hardware**
 
-Detect power analysis vulnerabilities *before* tape-out—in seconds, with no hardware required.
+[![Python 3.9+](https://img.shields.io/badge/python-3.9+-blue.svg)](https://www.python.org/downloads/)
+[![License](https://img.shields.io/badge/license-Apache--2.0-green.svg)](LICENSE)
+
+Detect power analysis vulnerabilities **before** tape-out—in seconds, with no hardware required.
+
+## Paper
+
+**"Pre-Silicon Side-Channel Verification of Post-Quantum Hardware: A Shift-Left Approach"**
+
+*Ray Iskander, December 2025*
+
+### Abstract
+
+Post-quantum cryptographic hardware faces a critical vulnerability gap: masked implementations designed to resist power analysis attacks often contain subtle flaws that evade traditional verification. We present Shiftleft, a formal verification framework that detects side-channel vulnerabilities in PQC hardware **before silicon fabrication**.
+
+Our key contributions:
+
+1. **Carry Bit Leakage Detection** - We prove that arithmetic masking in modular operations leaks information through carry propagation. Each carry observation reveals ~0.81 bits about the secret, with a 50% spread across the ML-DSA coefficient range.
+
+2. **Unmasked Intermediate Detection** - We identify a critical pattern where shares are combined before modular reduction (e.g., `res = (share0 + share1) % Q`), exposing the full secret value.
+
+3. **DOM Pipeline Verification** - We verify that Domain-Oriented Masking implementations use Pipeline=1 for glitch resistance, detecting configurations vulnerable to transient leakage.
+
+Applied to the Adams Bridge ML-DSA accelerator, Shiftleft detected **7 vulnerabilities** including 1 HIGH severity unmasked intermediate and 5 carry leakage locations—all confirmed as genuine security issues.
 
 ## The Problem
 
@@ -22,20 +45,71 @@ Shiftleft uses SMT-based formal verification to detect the same vulnerabilities 
 
 ## Validated Results
 
-On the Adams Bridge ML-DSA accelerator, Shiftleft detects the same vulnerability at `ntt_masked_BFU_mult.sv` line 69 that Karabulut and Azarderakhsh discovered through correlation power analysis (ePrint 2025/009):
-
-| Metric | Post-Silicon | Shiftleft |
-|--------|--------------|-----------|
+| Metric | Post-Silicon (CPA) | Shiftleft |
+|--------|-------------------|-----------|
 | Detection | Line 69 | Line 69 |
-| Traces required | 10,000 | 0 |
+| Traces required | 10,000 | **0** |
 | Time | Weeks | **0.21 seconds** |
-| Hardware | FPGA + scope | None |
+| Hardware | FPGA + scope | **None** |
 
-## Features
+## Quick Start: Reproduce Paper Results
 
-- **L1 Verifier**: Control-flow (timing) verification—detects secret-dependent branches
-- **L2 Verifier**: Hamming weight (power) verification—detects unmasked intermediates
-- **Complementary models**: Neither subsumes the other; both needed for comprehensive coverage
+```bash
+# Clone and install
+git clone https://github.com/quarkos-net/shiftleft
+cd shiftleft
+pip install -e .
+
+# Clone target design
+git clone https://github.com/chipsalliance/adams-bridge external/adams-bridge
+
+# Run ALL paper experiments
+python3 scripts/reproduce_paper.py
+```
+
+**Expected Output:**
+```
+✓ Carry Probability Formula - PASS
+✓ Information Leakage (~0.81 bits) - PASS
+✓ Spread Calculation (~50%) - PASS
+✓ DOM Pipeline Detection - PASS
+✓ Adams Bridge Full Analysis - PASS
+```
+
+## Key Findings: Adams Bridge
+
+| Finding | Severity | Location | Description |
+|---------|----------|----------|-------------|
+| Unmasked Intermediate | HIGH | `ntt_masked_BFU_mult.sv:69` | `(res0 + res1) % Q` exposes secret |
+| Carry Leakage | MEDIUM | `masked_barrett_reduction.sv:66` | Carry bit extraction |
+| Carry Leakage | MEDIUM | `masked_barrett_reduction.sv:82` | Share combination overflow |
+| Carry Leakage | MEDIUM | `masked_barrett_reduction.sv:87` | Carry propagation |
+| Carry Leakage | MEDIUM | `masked_barrett_reduction.sv:122` | Bit extraction |
+| Carry Leakage | MEDIUM | `masked_barrett_reduction.sv:133` | Bit extraction |
+| DOM Default | INFO | `abr_prim_dom_and_2share.sv:30` | Pipeline=0 default |
+
+## Individual Demonstrations
+
+```bash
+# Carry bit leakage (Monte Carlo + mathematical proof)
+python3 examples/carry_leakage_demo.py
+
+# DOM Pipeline vulnerability demonstration
+python3 examples/dom_pipeline_test.py
+
+# Unmasked intermediate detection
+python3 examples/unmasked_intermediate.py
+```
+
+## Target Analysis
+
+```bash
+# Analyze Adams Bridge ML-DSA accelerator
+python3 scripts/analyze_adams_bridge.py --target external/adams-bridge
+
+# JSON output for automation
+python3 scripts/analyze_adams_bridge.py --json > results.json
+```
 
 ## Installation
 
@@ -56,7 +130,7 @@ pip install -e ".[dev]"
 - Python 3.9+
 - Z3 Solver (automatically installed via `z3-solver`)
 
-## Quick Start
+## Usage
 
 ```python
 from shiftleft import HammingWeightVerifier, ModularHintVerifier
@@ -74,29 +148,38 @@ if l2_result.vulnerable:
     print(f"Leaking expression: {l2_result.expression}")
 ```
 
-## Example: Adams Bridge Vulnerability
+## Repository Structure
 
-The Adams Bridge ML-DSA accelerator contains a first-order side-channel vulnerability:
-
-```verilog
-// ntt_masked_BFU_mult.sv:69
-// Arithmetic masking: shares are mul_res0, mul_res1
-mul_res_combined = (mul_res0 + mul_res1) % MLDSA_Q;  // UNMASKED!
-mul_res_combined_share0 = mul_res_combined - rnd0;   // Re-masked too late
+```
+shiftleft/
+├── scripts/
+│   ├── reproduce_paper.py      # Full paper reproduction
+│   ├── analyze_adams_bridge.py # Adams Bridge analysis
+│   └── analyze_opentitan.py    # OpenTitan validation
+│
+├── examples/
+│   ├── carry_leakage_demo.py   # Carry probability demo
+│   ├── dom_pipeline_test.py    # DOM Pipeline demo
+│   └── unmasked_intermediate.py # Detection demo
+│
+├── src/shiftleft/              # Core library
+│
+└── docs/
+    └── REPRODUCTION.md         # Detailed reproduction guide
 ```
 
-The unmasked value `mul_res_combined` exists for one clock cycle—enough for power analysis to correlate its Hamming weight with secret operands.
+## Citation
 
-Shiftleft detects this in 0.21 seconds.
+```bibtex
+@article{iskander2025shiftleft,
+  title={Pre-Silicon Side-Channel Verification of Post-Quantum Hardware:
+         A Shift-Left Approach},
+  author={Iskander, Ray},
+  year={2025}
+}
+```
 
-## Paper
-
-This work is described in:
-
-> Ray Iskander, "Shift-Left Side-Channel Verification for ML-DSA Hardware,"
-> arXiv [cs.CR], December 2025.
-
-The methodology validates against findings by Karabulut and Azarderakhsh:
+This methodology validates against findings by Karabulut and Azarderakhsh:
 
 > Merve Karabulut and Reza Azarderakhsh, "Efficient CPA Attack on Hardware
 > Implementation of ML-DSA in Post-Quantum Root of Trust," ePrint 2025/009.
