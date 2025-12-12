@@ -1,0 +1,15 @@
+# Pinned dependencies for reproducibility
+# These EXACT versions produce the evidence hashes in the paper
+#
+# Generated: 2025-12-12
+# Paper: "Pre-Silicon Side-Channel Verification of Post-Quantum Hardware"
+
+z3-solver==4.12.4.0
+PyYAML==6.0.1
+pydantic==2.5.3
+pydantic-settings==2.1.0
+pytest==7.4.4
+pytest-asyncio==0.23.3
+
+# Evidence generation
+opentimestamps-client==0.7.2

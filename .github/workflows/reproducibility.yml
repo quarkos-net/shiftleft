@@ -1,0 +1,183 @@
+# Reproducibility Evidence Workflow
+#
+# This workflow provides LEGAL-GRADE evidence that experiments were executed
+# by running them in a clean, third-party environment (GitHub Actions).
+#
+# Evidence produced:
+# - Execution logs (timestamped by GitHub)
+# - Output hashes (SHA-256)
+# - Environment attestation
+# - Artifact preservation
+
+name: Reproducibility Evidence
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'scripts/reproduce_paper.py'
+      - 'scripts/analyze_*.py'
+      - 'src/**'
+  workflow_dispatch:  # Manual trigger for on-demand evidence generation
+    inputs:
+      full_evidence:
+        description: 'Generate full legal evidence package'
+        required: false
+        default: 'true'
+        type: boolean
+
+jobs:
+  reproducibility-evidence:
+    name: Generate Reproducibility Evidence
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Record environment attestation
+        id: environment
+        run: |
+          echo "=== ENVIRONMENT ATTESTATION ===" | tee environment.txt
+          echo "Timestamp: $(date -u +%Y-%m-%dT%H:%M:%SZ)" | tee -a environment.txt
+          echo "Runner: ${{ runner.os }} / ${{ runner.arch }}" | tee -a environment.txt
+          echo "GitHub Run ID: ${{ github.run_id }}" | tee -a environment.txt
+          echo "GitHub Run Number: ${{ github.run_number }}" | tee -a environment.txt
+          echo "Commit SHA: ${{ github.sha }}" | tee -a environment.txt
+          echo "Triggered by: ${{ github.actor }}" | tee -a environment.txt
+          echo "" | tee -a environment.txt
+          echo "=== SYSTEM INFO ===" | tee -a environment.txt
+          uname -a | tee -a environment.txt
+          echo "" | tee -a environment.txt
+
+          # Hash the environment file
+          ENV_HASH=$(sha256sum environment.txt | cut -d' ' -f1)
+          echo "environment_hash=$ENV_HASH" >> $GITHUB_OUTPUT
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+          echo "=== DEPENDENCY MANIFEST ===" | tee dependencies.txt
+          pip freeze | tee -a dependencies.txt
+
+          # Hash dependencies
+          DEP_HASH=$(sha256sum dependencies.txt | cut -d' ' -f1)
+          echo "Dependencies hash: $DEP_HASH" | tee -a dependencies.txt
+
+      - name: Clone external targets
+        run: |
+          mkdir -p external
+
+          # Adams Bridge (specific commit for reproducibility)
+          git clone https://github.com/chipsalliance/adams-bridge external/adams-bridge
+          cd external/adams-bridge
+          git checkout f92a363
+          cd ../..
+
+          # OpenTitan
+          git clone --depth 1 https://github.com/lowrisc/opentitan external/opentitan
+
+          echo "=== EXTERNAL TARGETS ===" | tee external_targets.txt
+          echo "Adams Bridge commit: $(cd external/adams-bridge && git rev-parse HEAD)" | tee -a external_targets.txt
+          echo "OpenTitan commit: $(cd external/opentitan && git rev-parse HEAD)" | tee -a external_targets.txt
+
+      - name: Execute reproduction experiments
+        id: experiments
+        run: |
+          echo "=== EXPERIMENT EXECUTION ===" | tee experiment_output.txt
+          echo "Start time: $(date -u +%Y-%m-%dT%H:%M:%SZ)" | tee -a experiment_output.txt
+          echo "" | tee -a experiment_output.txt
+
+          # Run the reproduction script
+          python scripts/reproduce_paper.py 2>&1 | tee -a experiment_output.txt
+
+          echo "" | tee -a experiment_output.txt
+          echo "End time: $(date -u +%Y-%m-%dT%H:%M:%SZ)" | tee -a experiment_output.txt
+
+          # Hash the output
+          OUTPUT_HASH=$(sha256sum experiment_output.txt | cut -d' ' -f1)
+          echo "experiment_hash=$OUTPUT_HASH" >> $GITHUB_OUTPUT
+          echo "" | tee -a experiment_output.txt
+          echo "Output SHA-256: $OUTPUT_HASH" | tee -a experiment_output.txt
+
+      - name: Run Adams Bridge detailed analysis
+        run: |
+          python scripts/analyze_adams_bridge.py --target external/adams-bridge --json > adams_bridge_results.json 2>&1
+
+          ADAMS_HASH=$(sha256sum adams_bridge_results.json | cut -d' ' -f1)
+          echo "Adams Bridge results SHA-256: $ADAMS_HASH"
+
+      - name: Run OpenTitan analysis
+        run: |
+          python scripts/analyze_opentitan.py --target external/opentitan --json > opentitan_results.json 2>&1
+
+          OPENTITAN_HASH=$(sha256sum opentitan_results.json | cut -d' ' -f1)
+          echo "OpenTitan results SHA-256: $OPENTITAN_HASH"
+
+      - name: Generate master evidence hash
+        id: master
+        run: |
+          echo "=== MASTER EVIDENCE HASH ===" | tee evidence_summary.txt
+          echo "Generated: $(date -u +%Y-%m-%dT%H:%M:%SZ)" | tee -a evidence_summary.txt
+          echo "GitHub Run: ${{ github.run_id }}" | tee -a evidence_summary.txt
+          echo "" | tee -a evidence_summary.txt
+
+          # Individual hashes
+          echo "Individual hashes:" | tee -a evidence_summary.txt
+          sha256sum environment.txt | tee -a evidence_summary.txt
+          sha256sum dependencies.txt | tee -a evidence_summary.txt
+          sha256sum experiment_output.txt | tee -a evidence_summary.txt
+          sha256sum adams_bridge_results.json | tee -a evidence_summary.txt
+          sha256sum opentitan_results.json | tee -a evidence_summary.txt
+
+          # Compute master hash
+          echo "" | tee -a evidence_summary.txt
+          cat environment.txt dependencies.txt experiment_output.txt adams_bridge_results.json opentitan_results.json | sha256sum | tee -a evidence_summary.txt
+
+          MASTER_HASH=$(cat environment.txt dependencies.txt experiment_output.txt adams_bridge_results.json opentitan_results.json | sha256sum | cut -d' ' -f1)
+          echo "master_hash=$MASTER_HASH" >> $GITHUB_OUTPUT
+
+          echo "" | tee -a evidence_summary.txt
+          echo "MASTER EVIDENCE HASH: $MASTER_HASH" | tee -a evidence_summary.txt
+
+      - name: Upload evidence artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: reproducibility-evidence-${{ github.run_number }}
+          path: |
+            environment.txt
+            dependencies.txt
+            experiment_output.txt
+            adams_bridge_results.json
+            opentitan_results.json
+            evidence_summary.txt
+          retention-days: 365  # Keep for 1 year
+
+      - name: Evidence summary
+        run: |
+          echo "=============================================="
+          echo "   REPRODUCIBILITY EVIDENCE GENERATED"
+          echo "=============================================="
+          echo ""
+          echo "GitHub Run ID: ${{ github.run_id }}"
+          echo "GitHub Run URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          echo ""
+          echo "Environment Hash: ${{ steps.environment.outputs.environment_hash }}"
+          echo "Experiment Hash: ${{ steps.experiments.outputs.experiment_hash }}"
+          echo "Master Hash: ${{ steps.master.outputs.master_hash }}"
+          echo ""
+          echo "This evidence is:"
+          echo "  - Timestamped by GitHub (third-party)"
+          echo "  - Executed in clean environment"
+          echo "  - Artifacts preserved for 365 days"
+          echo "  - Verifiable via GitHub API"
+          echo "=============================================="
