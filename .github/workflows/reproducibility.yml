@@ -160,7 +160,7 @@ jobs:
             adams_bridge_results.json
             opentitan_results.json
             evidence_summary.txt
-          retention-days: 365  # Keep for 1 year
+          retention-days: 90  # GitHub repo max
 
       - name: Evidence summary
         run: |
